@@ -532,12 +532,21 @@ static inline void gen_op_add_reg_T0(DisasContext *s, MemOp size, int reg)
     gen_op_mov_reg_v(s, size, reg, s->tmp0);
 }
 
+static inline void gen_sync_pc(TCGContext *ctx, uint64_t pc) {
+    TCGv v = tcg_temp_new(ctx);
+
+    tcg_gen_movi_tl(ctx, v, pc);
+    gen_op_jmp_v(ctx, v);
+
+    tcg_temp_free(ctx, v);
+}
+
 static inline void gen_op_ld_v(DisasContext *s, int idx, TCGv t0, TCGv a0)
 {
     TCGContext *tcg_ctx = s->uc->tcg_ctx;
 
     if (HOOK_EXISTS(s->uc, UC_HOOK_MEM_READ))
-        gen_jmp_im(s, s->prev_pc); // Unicorn: sync EIP
+        gen_sync_pc(tcg_ctx, s->prev_pc); // Unicorn: sync EIP
 
     tcg_gen_qemu_ld_tl(tcg_ctx, t0, a0, s->mem_index, idx | MO_LE);
 }
@@ -547,7 +556,7 @@ static inline void gen_op_st_v(DisasContext *s, int idx, TCGv t0, TCGv a0)
     TCGContext *tcg_ctx = s->uc->tcg_ctx;
 
     if (HOOK_EXISTS(s->uc, UC_HOOK_MEM_WRITE))
-        gen_jmp_im(s, s->prev_pc); // Unicorn: sync EIP
+        gen_sync_pc(tcg_ctx, s->prev_pc); // Unicorn: sync EIP
 
     tcg_gen_qemu_st_tl(tcg_ctx, t0, a0, s->mem_index, idx | MO_LE);
 }
@@ -4219,14 +4228,14 @@ static void gen_sse(CPUX86State *env, DisasContext *s, int b,
                 }
                 ot = mo_64_32(s->dflag);
                 gen_ldst_modrm(env, s, modrm, ot, OR_TMP0, 0);
-                /* Note that by zero-extending the mask operand, we
+                /* Note that by zero-extending the source operand, we
                    automatically handle zero-extending the result.  */
                 if (ot == MO_64) {
                     tcg_gen_mov_tl(tcg_ctx, s->T1, tcg_ctx->cpu_regs[s->vex_v]);
                 } else {
                     tcg_gen_ext32u_tl(tcg_ctx, s->T1, tcg_ctx->cpu_regs[s->vex_v]);
                 }
-                gen_helper_pdep(tcg_ctx, tcg_ctx->cpu_regs[reg], s->T0, s->T1);
+                gen_helper_pdep(tcg_ctx, tcg_ctx->cpu_regs[reg], s->T1, s->T0);
                 break;
 
             case 0x2f5: /* pext Gy, By, Ey */
@@ -4237,14 +4246,14 @@ static void gen_sse(CPUX86State *env, DisasContext *s, int b,
                 }
                 ot = mo_64_32(s->dflag);
                 gen_ldst_modrm(env, s, modrm, ot, OR_TMP0, 0);
-                /* Note that by zero-extending the mask operand, we
+                /* Note that by zero-extending the source operand, we
                    automatically handle zero-extending the result.  */
                 if (ot == MO_64) {
                     tcg_gen_mov_tl(tcg_ctx, s->T1, tcg_ctx->cpu_regs[s->vex_v]);
                 } else {
                     tcg_gen_ext32u_tl(tcg_ctx, s->T1, tcg_ctx->cpu_regs[s->vex_v]);
                 }
-                gen_helper_pext(tcg_ctx, tcg_ctx->cpu_regs[reg], s->T0, s->T1);
+                gen_helper_pext(tcg_ctx, tcg_ctx->cpu_regs[reg], s->T1, s->T0);
                 break;
 
             case 0x1f6: /* adcx Gy, Ey */
@@ -4801,7 +4810,7 @@ static target_ulong disas_insn(DisasContext *s, CPUState *cpu)
     if (uc_addr_is_exit(env->uc, s->pc)) {
         // imitate the HLT instruction
         gen_update_cc_op(s);
-        gen_jmp_im(s, pc_start - s->cs_base);
+        gen_sync_pc(tcg_ctx, pc_start - s->cs_base);
         gen_helper_hlt(tcg_ctx, tcg_ctx->cpu_env, tcg_const_i32(tcg_ctx, s->pc - pc_start));
         s->base.is_jmp = DISAS_NORETURN;
         return s->pc;
@@ -4816,7 +4825,7 @@ static target_ulong disas_insn(DisasContext *s, CPUState *cpu)
         }
 
         // Sync PC in advance
-        gen_jmp_im(s, pc_start - s->cs_base);
+        gen_sync_pc(tcg_ctx, pc_start - s->cs_base);
 
         // save the last operand
         prev_op = tcg_last_op(tcg_ctx);

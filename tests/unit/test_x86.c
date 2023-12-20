@@ -1438,7 +1438,8 @@ static void test_x86_segmentation()
     uc_assert_err(UC_ERR_EXCEPTION, uc_reg_write(uc, UC_X86_REG_FS, &fs));
 }
 
-static void test_x86_0xff_lcall_callback(uc_engine *uc, uint64_t address, uint32_t size, void *user_data)
+static void test_x86_0xff_lcall_callback(uc_engine *uc, uint64_t address,
+                                         uint32_t size, void *user_data)
 {
     // do nothing
     return;
@@ -1447,9 +1448,11 @@ static void test_x86_0xff_lcall_callback(uc_engine *uc, uint64_t address, uint32
 // This aborts prior to a7a5d187e77f7853755eff4768658daf8095c3b7
 static void test_x86_0xff_lcall()
 {
-    uc_engine* uc;
+    uc_engine *uc;
     uc_hook hk;
-    const char code[] = "\xB8\x01\x00\x00\x00\xBB\x01\x00\x00\x00\xB9\x01\x00\x00\x00\xFF\xDD\xBA\x01\x00\x00\x00\xB8\x02\x00\x00\x00\xBB\x02\x00\x00\x00";
+    const char code[] =
+        "\xB8\x01\x00\x00\x00\xBB\x01\x00\x00\x00\xB9\x01\x00\x00\x00\xFF\xDD"
+        "\xBA\x01\x00\x00\x00\xB8\x02\x00\x00\x00\xBB\x02\x00\x00\x00";
     // Taken from #1842
     // 0:  b8 01 00 00 00          mov    eax,0x1
     // 5:  bb 01 00 00 00          mov    ebx,0x1
@@ -1458,13 +1461,132 @@ static void test_x86_0xff_lcall()
     // 10: dd ba 01 00 00 00       fnstsw WORD PTR [edx+0x1]
     // 16: b8 02 00 00 00          mov    eax,0x2
     // 1b: bb 02 00 00 00          mov    ebx,0x2
-    
+
     uc_common_setup(&uc, UC_ARCH_X86, UC_MODE_32, code, sizeof(code) - 1);
 
-    OK(uc_hook_add(uc, &hk, UC_HOOK_CODE, test_x86_0xff_lcall_callback, NULL, 1, 0));
+    OK(uc_hook_add(uc, &hk, UC_HOOK_CODE, test_x86_0xff_lcall_callback, NULL, 1,
+                   0));
 
-    uc_assert_err(UC_ERR_INSN_INVALID, uc_emu_start(uc, code_start, code_start + sizeof(code) - 1, 0, 0));
+    uc_assert_err(
+        UC_ERR_INSN_INVALID,
+        uc_emu_start(uc, code_start, code_start + sizeof(code) - 1, 0, 0));
 
+    OK(uc_close(uc));
+}
+
+static bool test_x86_64_not_overwriting_tmp0_for_pc_update_cb(
+    uc_engine *uc, uc_mem_type type, uint64_t address, int size, uint64_t value,
+    void *user_data)
+{
+    return true;
+}
+
+// https://github.com/unicorn-engine/unicorn/issues/1717
+// https://github.com/unicorn-engine/unicorn/issues/1862
+static void test_x86_64_not_overwriting_tmp0_for_pc_update()
+{
+    uc_engine *uc;
+    uc_hook hk;
+    const char code[] = "\x48\xb9\xff\xff\xff\xff\xff\xff\xff\xff\x48\x89\x0c"
+                        "\x24\x48\xd3\x24\x24\x73\x0a";
+    uint64_t rsp, pc, eflags;
+
+    // 0x1000: movabs  rcx, 0xffffffffffffffff
+    // 0x100a: mov     qword ptr [rsp], rcx
+    // 0x100e: shl     qword ptr [rsp], cl ; (Shift to CF=1)
+    // 0x1012: jae     0xd ; this jump should not be taken! (CF=1 but jae
+    // expects CF=0)
+    uc_common_setup(&uc, UC_ARCH_X86, UC_MODE_64, code, sizeof(code) - 1);
+    OK(uc_hook_add(uc, &hk, UC_HOOK_MEM_READ | UC_HOOK_MEM_WRITE,
+                   test_x86_64_not_overwriting_tmp0_for_pc_update_cb, NULL, 1,
+                   0));
+
+    rsp = 0x2000;
+    OK(uc_reg_write(uc, UC_X86_REG_RSP, (void *)&rsp));
+    OK(uc_emu_start(uc, code_start, code_start + sizeof(code) - 1, 0, 4));
+    OK(uc_reg_read(uc, UC_X86_REG_RIP, &pc));
+    OK(uc_reg_read(uc, UC_X86_REG_EFLAGS, &eflags));
+
+    TEST_CHECK(pc == 0x1014);
+    TEST_CHECK((eflags & 0x1) == 1);
+
+    OK(uc_close(uc));
+}
+
+#define MEM_BASE 0x40000000
+#define MEM_SIZE 1024*1024
+#define MEM_STACK MEM_BASE + (MEM_SIZE / 2)
+#define MEM_TEXT MEM_STACK + 4096
+
+static void test_fxsave_fpip_x86(void) {
+    // note: fxsave was introduced in Pentium II
+    uint8_t code_x86[] = {
+        // help testing through NOP offset      [disassembly in at&t syntax]
+	0x90, 0x90, 0x90, 0x90, 		// nop nop nop nop
+	// run a floating point instruction
+	0xdb, 0xc9,				// fcmovne %st(1), %st
+	// fxsave needs 512 bytes of storage space
+	0x81, 0xec, 0x00, 0x02, 0x00, 0x00, 	// subl $512, %esp
+	// fxsave needs a 16-byte aligned address for storage
+	0x83, 0xe4, 0xf0,			// andl $0xfffffff0, %esp
+	// store fxsave data on the stack
+	0x0f, 0xae, 0x04, 0x24,			// fxsave (%esp)
+	// fxsave stores FPIP at an 8-byte offset, move FPIP to eax register
+	0x8b, 0x44, 0x24, 0x08			// movl 0x8(%esp), %eax
+    };
+    uc_err err;
+    uint32_t X86_NOP_OFFSET = 4;
+    uint32_t stack_top = (uint32_t) MEM_STACK;
+    uint32_t value;
+    uc_engine *uc;
+
+    // initialize emulator in X86-32bit mode
+    OK(uc_open(UC_ARCH_X86, UC_MODE_32, &uc));
+	
+    // map 1MB of memory for this emulation
+    OK(uc_mem_map(uc, MEM_BASE, MEM_SIZE, UC_PROT_ALL));
+    OK(uc_mem_write(uc, MEM_TEXT, code_x86, sizeof(code_x86)));
+    OK(uc_reg_write(uc, UC_X86_REG_ESP, &stack_top));
+    OK(uc_emu_start(uc, MEM_TEXT, MEM_TEXT + sizeof(code_x86), 0, 0));
+    OK(uc_reg_read(uc, UC_X86_REG_EAX, &value));
+    TEST_CHECK(value == ((uint32_t) MEM_TEXT + X86_NOP_OFFSET));
+    OK(uc_mem_unmap(uc, MEM_BASE, MEM_SIZE));
+    OK(uc_close(uc));
+}
+
+static void test_fxsave_fpip_x64(void) {
+    uint8_t code_x64[] = {
+        // help testing through NOP offset     [disassembly in at&t]
+	0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, // nops
+	// run a floating point instruction
+	0xdb, 0xc9,			       // fcmovne %st(1), %st
+	// fxsave64 needs 512 bytes of storage space
+	0x48, 0x81, 0xec, 0x00, 0x02, 0x00, 0x00, // subq $512, %rsp
+	// fxsave needs a 16-byte aligned address for storage
+	0x48, 0x83, 0xe4, 0xf0,	               // andq 0xfffffffffffffff0, %rsp
+	// store fxsave64 data on the stack
+	0x48, 0x0f, 0xae, 0x04, 0x24,          // fxsave64 (%rsp)
+	// fxsave64 stores FPIP at an 8-byte offset, move FPIP to rax register
+	0x48, 0x8b, 0x44, 0x24, 0x08,	       // movq 0x8(%rsp), %rax
+    };
+
+    uc_err err;
+    uint64_t stack_top = (uint64_t) MEM_STACK;
+    uint64_t X64_NOP_OFFSET = 8;
+    uint64_t value;
+    uc_engine *uc;
+
+    // initialize emulator in X86-32bit mode
+    OK(uc_open(UC_ARCH_X86, UC_MODE_64, &uc));
+
+    // map 1MB of memory for this emulation
+    OK(uc_mem_map(uc, MEM_BASE, MEM_SIZE, UC_PROT_ALL));
+    OK(uc_mem_write(uc, MEM_TEXT, code_x64, sizeof(code_x64)));
+    OK(uc_reg_write(uc, UC_X86_REG_RSP, &stack_top));
+    OK(uc_emu_start(uc, MEM_TEXT, MEM_TEXT + sizeof(code_x64), 0, 0));
+    OK(uc_reg_read(uc, UC_X86_REG_RAX, &value));
+    TEST_CHECK(value == ((uint64_t) MEM_TEXT + X64_NOP_OFFSET));
+    OK(uc_mem_unmap(uc, MEM_BASE, MEM_SIZE));
     OK(uc_close(uc));
 }
 
@@ -1515,4 +1637,8 @@ TEST_LIST = {
     {"test_x86_vtlb", test_x86_vtlb},
     {"test_x86_segmentation", test_x86_segmentation},
     {"test_x86_0xff_lcall", test_x86_0xff_lcall},
+    {"test_x86_64_not_overwriting_tmp0_for_pc_update",
+     test_x86_64_not_overwriting_tmp0_for_pc_update},
+    {"test_fxsave_fpip_x86", test_fxsave_fpip_x86},
+    {"test_fxsave_fpip_x64", test_fxsave_fpip_x64},
     {NULL, NULL}};

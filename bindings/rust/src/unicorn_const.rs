@@ -14,54 +14,94 @@ pub const MILISECOND_SCALE: u64 = 1_000;
 #[derive(PartialEq, Debug, Clone, Copy)]
 #[allow(clippy::upper_case_acronyms)]
 pub enum uc_error {
-    OK = 0,
-    NOMEM = 1,
-    ARCH = 2,
-    HANDLE = 3,
-    MODE = 4,
-    VERSION = 5,
-    READ_UNMAPPED = 6,
-    WRITE_UNMAPPED = 7,
-    FETCH_UNMAPPED = 8,
-    HOOK = 9,
-    INSN_INVALID = 10,
-    MAP = 11,
-    WRITE_PROT = 12,
-    READ_PROT = 13,
-    FETCH_PROT = 14,
-    ARG = 15,
-    READ_UNALIGNED = 16,
+    OK              = 0,
+    NOMEM           = 1,
+    ARCH            = 2,
+    HANDLE          = 3,
+    MODE            = 4,
+    VERSION         = 5,
+    READ_UNMAPPED   = 6,
+    WRITE_UNMAPPED  = 7,
+    FETCH_UNMAPPED  = 8,
+    HOOK            = 9,
+    INSN_INVALID    = 10,
+    MAP             = 11,
+    WRITE_PROT      = 12,
+    READ_PROT       = 13,
+    FETCH_PROT      = 14,
+    ARG             = 15,
+    READ_UNALIGNED  = 16,
     WRITE_UNALIGNED = 17,
     FETCH_UNALIGNED = 18,
-    HOOK_EXIST = 19,
-    RESOURCE = 20,
-    EXCEPTION = 21,
+    HOOK_EXIST      = 19,
+    RESOURCE        = 20,
+    EXCEPTION       = 21,
+}
+
+impl uc_error {
+    /// Calls op if the result is Ok, otherwise returns the Err value of self.
+    /// This function can be used for control flow based on Result values.
+    pub fn and_then<U, F: FnOnce() -> Result<U, uc_error>>(
+        self,
+        op: F,
+    ) -> Result<U, uc_error> {
+        if let Self::OK = self {
+            op()
+        } else {
+            Err(self)
+        }
+    }
+
+    /// Returns res if the result is Ok, otherwise returns the Err value of self.
+    /// Arguments passed to and are eagerly evaluated; if you are passing the result
+    /// of a function call, it is recommended to use and_then, which is lazily evaluated.
+    pub fn and<U>(
+        self,
+        res: Result<U, uc_error>,
+    ) -> Result<U, uc_error> {
+        if let Self::OK = self {
+            res
+        } else {
+            Err(self)
+        }
+    }
+}
+
+impl From<uc_error> for Result<(), uc_error> {
+    fn from(value: uc_error) -> Self {
+        if let uc_error::OK = value {
+            Ok(())
+        } else {
+            Err(value)
+        }
+    }
 }
 
 #[repr(C)]
 #[derive(PartialEq, Debug, Clone, Copy)]
 pub enum MemType {
-    READ = 16,
-    WRITE = 17,
-    FETCH = 18,
-    READ_UNMAPPED = 19,
+    READ           = 16,
+    WRITE          = 17,
+    FETCH          = 18,
+    READ_UNMAPPED  = 19,
     WRITE_UNMAPPED = 20,
     FETCH_UNMAPPED = 21,
-    WRITE_PROT = 22,
-    READ_PROT = 23,
-    FETCH_PROT = 24,
-    READ_AFTER = 25,
+    WRITE_PROT     = 22,
+    READ_PROT      = 23,
+    FETCH_PROT     = 24,
+    READ_AFTER     = 25,
 }
 
 #[repr(C)]
 #[derive(PartialEq, Debug, Clone, Copy)]
 pub enum TlbType {
-    CPU = 0,
+    CPU     = 0,
     VIRTUAL = 1,
 }
 
 bitflags! {
     #[repr(C)]
+    #[derive(Copy, Clone)]
     pub struct HookType: i32 {
         const INTR = 1;
         const INSN = 2;
@@ -71,28 +111,28 @@ bitflags! {
         const MEM_READ_UNMAPPED = 0x10;
         const MEM_WRITE_UNMAPPED = 0x20;
         const MEM_FETCH_UNMAPPED = 0x40;
-        const MEM_UNMAPPED = Self::MEM_READ_UNMAPPED.bits | Self::MEM_WRITE_UNMAPPED.bits | Self::MEM_FETCH_UNMAPPED.bits;
+        const MEM_UNMAPPED = Self::MEM_READ_UNMAPPED.bits() | Self::MEM_WRITE_UNMAPPED.bits() | Self::MEM_FETCH_UNMAPPED.bits();
 
         const MEM_READ_PROT = 0x80;
         const MEM_WRITE_PROT = 0x100;
         const MEM_FETCH_PROT = 0x200;
-        const MEM_PROT = Self::MEM_READ_PROT.bits | Self::MEM_WRITE_PROT.bits | Self::MEM_FETCH_PROT.bits;
+        const MEM_PROT = Self::MEM_READ_PROT.bits() | Self::MEM_WRITE_PROT.bits() | Self::MEM_FETCH_PROT.bits();
 
         const MEM_READ = 0x400;
         const MEM_WRITE = 0x800;
         const MEM_FETCH = 0x1000;
-        const MEM_VALID = Self::MEM_READ.bits | Self::MEM_WRITE.bits | Self::MEM_FETCH.bits;
+        const MEM_VALID = Self::MEM_READ.bits() | Self::MEM_WRITE.bits() | Self::MEM_FETCH.bits();
 
         const MEM_READ_AFTER = 0x2000;
 
         const INSN_INVALID = 0x4000;
 
-        const MEM_READ_INVALID = Self::MEM_READ_UNMAPPED.bits | Self::MEM_READ_PROT.bits;
-        const MEM_WRITE_INVALID = Self::MEM_WRITE_UNMAPPED.bits | Self::MEM_WRITE_PROT.bits;
-        const MEM_FETCH_INVALID = Self::MEM_FETCH_UNMAPPED.bits | Self::MEM_FETCH_PROT.bits;
-        const MEM_INVALID = Self::MEM_READ_INVALID.bits | Self::MEM_WRITE_INVALID.bits | Self::MEM_FETCH_INVALID.bits;
+        const MEM_READ_INVALID = Self::MEM_READ_UNMAPPED.bits() | Self::MEM_READ_PROT.bits();
+        const MEM_WRITE_INVALID = Self::MEM_WRITE_UNMAPPED.bits() | Self::MEM_WRITE_PROT.bits();
+        const MEM_FETCH_INVALID = Self::MEM_FETCH_UNMAPPED.bits() | Self::MEM_FETCH_PROT.bits();
+        const MEM_INVALID = Self::MEM_READ_INVALID.bits() | Self::MEM_WRITE_INVALID.bits() | Self::MEM_FETCH_INVALID.bits();
 
-        const MEM_ALL = Self::MEM_VALID.bits | Self::MEM_INVALID.bits;
+        const MEM_ALL = Self::MEM_VALID.bits() | Self::MEM_INVALID.bits();
 
         const TLB = (1 << 17);
     }
@@ -102,20 +142,21 @@ bitflags! {
 #[derive(PartialEq, Debug, Clone, Copy)]
 #[allow(clippy::upper_case_acronyms)]
 pub enum Query {
-    MODE = 1,
+    MODE      = 1,
     PAGE_SIZE = 2,
-    ARCH = 3,
-    TIMEOUT = 4,
+    ARCH      = 3,
+    TIMEOUT   = 4,
 }
 
 bitflags! {
 #[repr(C)]
+    #[derive(Copy, Clone, Debug)]
 pub struct Permission : u32 {
         const NONE = 0;
         const READ = 1;
         const WRITE = 2;
         const EXEC = 4;
-        const ALL = Self::READ.bits | Self::WRITE.bits | Self::EXEC.bits;
+        const ALL = Self::READ.bits() | Self::WRITE.bits() | Self::EXEC.bits();
     }
 }
 
@@ -130,17 +171,17 @@ pub struct MemRegion {
 #[repr(C)]
 #[derive(PartialEq, Debug, Clone, Copy)]
 pub enum Arch {
-    ARM = 1,
-    ARM64 = 2,
-    MIPS = 3,
-    X86 = 4,
-    PPC = 5,
-    SPARC = 6,
-    M68K = 7,
-    RISCV = 8,
-    S390X = 9,
+    ARM     = 1,
+    ARM64   = 2,
+    MIPS    = 3,
+    X86     = 4,
+    PPC     = 5,
+    SPARC   = 6,
+    M68K    = 7,
+    RISCV   = 8,
+    S390X   = 9,
     TRICORE = 10,
-    MAX = 11,
+    MAX     = 11,
 }
 
 impl TryFrom<usize> for Arch {
@@ -165,6 +206,7 @@ impl TryFrom<usize> for Arch {
 }
 
 bitflags! {
+    #[derive(Copy, Clone)]
     #[repr(C)]
     pub struct Mode: i32 {
         const LITTLE_ENDIAN = 0;
@@ -178,22 +220,22 @@ bitflags! {
         const ARM926 = 0x80;
         const ARM946 = 0x100;
         const ARM1176 = 0x200;
-        const MICRO = Self::THUMB.bits;
-        const MIPS3 = Self::MCLASS.bits;
-        const MIPS32R6 = Self::V8.bits;
+        const MICRO = Self::THUMB.bits();
+        const MIPS3 = Self::MCLASS.bits();
+        const MIPS32R6 = Self::V8.bits();
         const MIPS32 = 4;
         const MIPS64 = 8;
         const MODE_16 = 2;
-        const MODE_32 = Self::MIPS32.bits;
-        const MODE_64 = Self::MIPS64.bits;
-        const PPC32 = Self::MIPS32.bits;
-        const PPC64 = Self::MIPS64.bits;
-        const QPX = Self::THUMB.bits;
-        const SPARC32 = Self::MIPS32.bits;
-        const SPARC64 = Self::MIPS64.bits;
-        const V9 = Self::THUMB.bits;
-        const RISCV32 = Self::MIPS32.bits;
-        const RISCV64 = Self::MIPS64.bits;
+        const MODE_32 = Self::MIPS32.bits();
+        const MODE_64 = Self::MIPS64.bits();
+        const PPC32 = Self::MIPS32.bits();
+        const PPC64 = Self::MIPS64.bits();
+        const QPX = Self::THUMB.bits();
+        const SPARC32 = Self::MIPS32.bits();
+        const SPARC64 = Self::MIPS64.bits();
+        const V9 = Self::THUMB.bits();
+        const RISCV32 = Self::MIPS32.bits();
+        const RISCV64 = Self::MIPS64.bits();
     }
 }
 
@@ -202,7 +244,7 @@ bitflags! {
 pub struct TranslationBlock {
     pub pc: u64,
     pub icount: u16,
-    pub size: u16
+    pub size: u16,
 }
 
 macro_rules! UC_CTL_READ {
@@ -224,22 +266,34 @@ macro_rules! UC_CTL_READ_WRITE {
 }
 
 #[allow(clippy::upper_case_acronyms)]
+#[repr(u64)]
 pub enum ControlType {
-    UC_CTL_UC_MODE = 0,
+    UC_CTL_UC_MODE      = 0,
     UC_CTL_UC_PAGE_SIZE = 1,
-    UC_CTL_UC_ARCH = 2,
-    UC_CTL_UC_TIMEOUT = 3,
+    UC_CTL_UC_ARCH      = 2,
+    UC_CTL_UC_TIMEOUT   = 3,
     UC_CTL_UC_USE_EXITS = 4,
     UC_CTL_UC_EXITS_CNT = 5,
-    UC_CTL_UC_EXITS = 6,
-    UC_CTL_CPU_MODEL = 7,
+    UC_CTL_UC_EXITS     = 6,
+    UC_CTL_CPU_MODEL    = 7,
     UC_CTL_TB_REQUEST_CACHE = 8,
     UC_CTL_TB_REMOVE_CACHE = 9,
-    UC_CTL_TB_FLUSH = 10,
-    UC_CTL_TLB_FLUSH = 11,
-    UC_CTL_TLB_TYPE = 12,
-    UC_CTL_IO_READ = 1<<31,
-    UC_CTL_IO_WRITE = 1<<30,
+    UC_CTL_TB_FLUSH     = 10,
+    UC_CTL_TLB_FLUSH    = 11,
+    UC_CTL_TLB_TYPE     = 12,
+    UC_CTL_TCG_BUFFER_SIZE = 13,
+    UC_CTL_CONTEXT_MODE = 14,
+    UC_CTL_IO_READ      = 1 << 31,
+    UC_CTL_IO_WRITE     = 1 << 30,
+}
+
+bitflags! {
+    #[derive(Debug, Copy, Clone)]
+    #[repr(C)]
+    pub struct ContextMode : u32 {
+        const CPU    = 1;
+        const Memory = 2;
+    }
 }
 
 #[repr(C)]
